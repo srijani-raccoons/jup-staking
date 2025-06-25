@@ -1,4 +1,4 @@
-name: Daily Jupiter Staking Update
+name: Daily Jupiter Staking & Wallets Update
 
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # Allows manual trigger
 
 jobs:
-  update-staking-data:
+  update-combined-staking-data:
     runs-on: ubuntu-latest
     
     steps:
@@ -18,24 +18,25 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        cache: 'npm'
         
     - name: Install dependencies
-      run: npm ci
-      
-    - name: Run daily staking update
+      run: |
+        npm init -y
+        npm install dotenv
+        
+    - name: Run combined staking update
       env:
         HELIUS_API_KEY: ${{ secrets.HELIUS_API_KEY }}
-      run: node daily_updater_workflow.js
+      run: node daily_updater.js
       
     - name: Check for changes
       id: verify-changed-files
       run: |
-        if git diff --quiet; then
-          echo "No changes detected"
+        if git diff --quiet jupiter_combined_staking.json; then
+          echo "No changes detected in combined data"
           echo "changed=false" >> $GITHUB_OUTPUT
         else
-          echo "Changes detected"
+          echo "Changes detected in combined data"
           echo "changed=true" >> $GITHUB_OUTPUT
         fi
         
@@ -44,10 +45,10 @@ jobs:
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        git add jupiter_staking_data.json
-        git commit -m "Daily staking data update for $(date -u +%Y-%m-%d)"
+        git add jupiter_combined_staking.json
+        git commit -m "Daily combined staking data update for $(date -u +%Y-%m-%d)"
         git push
         
     - name: No changes to commit
       if: steps.verify-changed-files.outputs.changed == 'false'
-      run: echo "No new staking data to commit"
+      run: echo "No new combined staking data to commit"
