@@ -6,6 +6,9 @@ on:
     - cron: '0 1 * * *'
   workflow_dispatch: # Allows manual trigger
 
+permissions:
+  contents: write
+
 jobs:
   update-combined-staking-data:
     runs-on: ubuntu-latest
