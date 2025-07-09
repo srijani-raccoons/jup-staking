@@ -6,20 +6,26 @@ const JUPITER_STAKING_PROGRAM = 'voTpe3tHQ7AjQHMapgSue2HJFAh2cGsdokqN3XqmVSj';
 const JUP_MINT = 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN';
 const CLAIM_STAKE_PROGRAM = 'DiS3nNjFVMieMgmiQFm6wgJL7nevk4NrhXKLbtEH1Z2R';
 
-// Dynamic cutoff - will be determined from existing data
 let CUTOFF_DATE;
 let CUTOFF_TIMESTAMP;
 
-class EnhancedCombinedUpdater {
+class JupiterUpdater {
     constructor(apiKey) {
         this.apiKey = apiKey;
         this.baseUrl = 'https://api.helius.xyz';
         this.dailyTotals = new Map();
-        this.walletActivityByDate = new Map(); // date -> Map(wallet -> {staked, withdrawn, netChange})
-        this.allWallets = new Set(); // Track all wallets we've seen
+        this.walletActivityByDate = new Map();
+        this.allWallets = new Set();
+        this.processedSignatures = new Set();
+        this.duplicateStats = {
+            totalProcessed: 0,
+            duplicatesSkipped: 0,
+            multipleInstructionTx: 0,
+            claimAndStakeTx: 0
+        };
     }
 
-    async fetchTransactionsByAddress(address, beforeSignature = null, limit = 100) {
+    async fetchTransactionsByAddress(address, beforeSignature = null, limit = 100, retries = 5) {
         const url = `${this.baseUrl}/v0/addresses/${address}/transactions`;
         const params = new URLSearchParams({
             'api-key': this.apiKey,
@@ -31,11 +37,22 @@ class EnhancedCombinedUpdater {
             params.append('before', beforeSignature);
         }
 
-        const response = await fetch(`${url}?${params}`);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                const response = await fetch(`${url}?${params}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return await response.json();
+            } catch (error) {
+                if (attempt === retries) {
+                    throw error;
+                }
+                
+                const backoffDelay = Math.min(2000 * Math.pow(2, attempt), 30000);
+                await new Promise(resolve => setTimeout(resolve, backoffDelay));
+            }
         }
-        return await response.json();
     }
 
     parseInstructionData(instruction) {
@@ -64,29 +81,27 @@ class EnhancedCombinedUpdater {
         return { type: instructionType || 'unknown' };
     }
 
-    extractAmountFromTokenTransfers(tokenTransfers) {
+    extractJupTokenTransfers(tokenTransfers) {
         if (!tokenTransfers || tokenTransfers.length === 0) {
-            return 0;
+            return { totalAmount: 0, transfers: [] };
         }
 
         const jupTransfers = tokenTransfers.filter(transfer => 
             transfer.mint === JUP_MINT
         );
 
-        if (jupTransfers.length === 0) {
-            return 0;
-        }
+        const totalAmount = jupTransfers.reduce((sum, transfer) => 
+            sum + (transfer.tokenAmount || 0), 0
+        );
 
-        return jupTransfers[0].tokenAmount || 0;
+        return { totalAmount, transfers: jupTransfers };
     }
 
     extractWalletFromTransaction(transaction) {
-        // Get the fee payer (first signer) as the wallet address
         if (transaction.feePayer) {
             return transaction.feePayer;
         }
         
-        // Fallback to first account if feePayer not available
         if (transaction.accountKeys && transaction.accountKeys.length > 0) {
             return transaction.accountKeys[0].pubkey;
         }
@@ -94,8 +109,78 @@ class EnhancedCombinedUpdater {
         return null;
     }
 
+    analyzeTransactionType(transaction) {
+        let hasClaimAndStake = false;
+        let hasDirectJupiter = false;
+        let hasInnerJupiter = false;
+        let jupiterInstructions = [];
+
+        if (transaction.instructions) {
+            for (const instruction of transaction.instructions) {
+                if (instruction.programId === CLAIM_STAKE_PROGRAM) {
+                    hasClaimAndStake = true;
+                }
+
+                if (instruction.programId === JUPITER_STAKING_PROGRAM) {
+                    hasDirectJupiter = true;
+                    const parsed = this.parseInstructionData(instruction);
+                    if (parsed) {
+                        jupiterInstructions.push({
+                            type: parsed.type,
+                            level: 'direct'
+                        });
+                    }
+                }
+
+                if (instruction.innerInstructions) {
+                    for (const innerInstruction of instruction.innerInstructions) {
+                        if (innerInstruction.programId === JUPITER_STAKING_PROGRAM) {
+                            hasInnerJupiter = true;
+                            const parsed = this.parseInstructionData(innerInstruction);
+                            if (parsed) {
+                                jupiterInstructions.push({
+                                    type: parsed.type,
+                                    level: 'inner'
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let transactionType = 'unknown';
+        let relevantInstructions = [];
+
+        if (hasClaimAndStake) {
+            transactionType = 'claim_and_stake';
+            relevantInstructions = jupiterInstructions.filter(inst => inst.level === 'inner');
+            this.duplicateStats.claimAndStakeTx++;
+        } else if (hasInnerJupiter && hasDirectJupiter) {
+            transactionType = 'inner_jupiter';
+            relevantInstructions = jupiterInstructions.filter(inst => inst.level === 'inner');
+            this.duplicateStats.multipleInstructionTx++;
+        } else if (hasDirectJupiter) {
+            transactionType = 'direct_jupiter';
+            relevantInstructions = jupiterInstructions.filter(inst => inst.level === 'direct');
+        } else if (hasInnerJupiter) {
+            transactionType = 'inner_jupiter';
+            relevantInstructions = jupiterInstructions.filter(inst => inst.level === 'inner');
+        }
+
+        return {
+            type: transactionType,
+            instructions: relevantInstructions,
+            hasMultiplePaths: (hasClaimAndStake && hasDirectJupiter) || (hasInnerJupiter && hasDirectJupiter)
+        };
+    }
+
     processTransaction(transaction) {
-        // Only process transactions from cutoff onwards (including the cutoff date)
+        if (this.processedSignatures.has(transaction.signature)) {
+            this.duplicateStats.duplicatesSkipped++;
+            return false;
+        }
+
         if (transaction.timestamp < CUTOFF_TIMESTAMP) {
             return false;
         }
@@ -103,12 +188,13 @@ class EnhancedCombinedUpdater {
         const date = new Date(transaction.timestamp * 1000).toISOString().split('T')[0];
         const lastCompletedDate = this.getLastCompletedDate();
         
-        // Skip transactions from today (incomplete day)
         if (date > lastCompletedDate) {
             return false;
         }
+
+        this.processedSignatures.add(transaction.signature);
+        this.duplicateStats.totalProcessed++;
         
-        // Initialize daily data structures
         if (!this.dailyTotals.has(date)) {
             this.dailyTotals.set(date, {
                 date: date,
@@ -122,13 +208,10 @@ class EnhancedCombinedUpdater {
 
         const dayData = this.dailyTotals.get(date);
         const dayWalletActivity = this.walletActivityByDate.get(date);
-        let hasStakingActivity = false;
 
-        // Extract wallet address
         const walletAddress = this.extractWalletFromTransaction(transaction);
         if (!walletAddress) return false;
 
-        // Initialize wallet activity for this date
         if (!dayWalletActivity.has(walletAddress)) {
             dayWalletActivity.set(walletAddress, {
                 staked: 0,
@@ -138,89 +221,47 @@ class EnhancedCombinedUpdater {
         }
 
         const walletDayData = dayWalletActivity.get(walletAddress);
+        const txAnalysis = this.analyzeTransactionType(transaction);
+        
+        if (txAnalysis.type === 'unknown' || txAnalysis.instructions.length === 0) {
+            return false;
+        }
 
-        if (transaction.instructions) {
-            for (const instruction of transaction.instructions) {
-                // Check direct Jupiter staking instructions
-                if (instruction.programId === JUPITER_STAKING_PROGRAM) {
-                    const parsedInstruction = this.parseInstructionData(instruction);
-                    
-                    if (parsedInstruction && parsedInstruction.type !== 'unknown' && parsedInstruction.type !== 'toggleMaxLock') {
-                        const amount = this.extractAmountFromTokenTransfers(transaction.tokenTransfers);
-                        
-                        if (amount > 0) {
-                            if (parsedInstruction.type === 'increaseLockedAmount') {
-                                dayData.staked += amount;
-                                walletDayData.staked += amount;
-                            } else if (parsedInstruction.type === 'withdraw' || parsedInstruction.type === 'withdrawPartialUnstaking') {
-                                dayData.withdrawn += amount;
-                                walletDayData.withdrawn += amount;
-                            }
-                            
-                            this.allWallets.add(walletAddress);
-                            hasStakingActivity = true;
-                        }
-                    }
-                }
+        const { totalAmount } = this.extractJupTokenTransfers(transaction.tokenTransfers);
+        
+        if (totalAmount === 0) {
+            return false;
+        }
 
-                // Check for claim-and-stake operations (merkle distributor program)
-                if (instruction.programId === CLAIM_STAKE_PROGRAM) {
-                    // Check if it has inner Jupiter staking instructions
-                    if (instruction.innerInstructions) {
-                        for (const innerInstruction of instruction.innerInstructions) {
-                            if (innerInstruction.programId === JUPITER_STAKING_PROGRAM) {
-                                const parsedInner = this.parseInstructionData(innerInstruction);
-                                
-                                if (parsedInner && parsedInner.type === 'increaseLockedAmount') {
-                                    const amount = this.extractAmountFromTokenTransfers(transaction.tokenTransfers);
-                                    
-                                    if (amount > 0) {
-                                        dayData.staked += amount;
-                                        walletDayData.staked += amount;
-                                        this.allWallets.add(walletAddress);
-                                        hasStakingActivity = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        const stakingInstructions = txAnalysis.instructions.filter(inst => 
+            inst.type === 'increaseLockedAmount'
+        );
+        const withdrawInstructions = txAnalysis.instructions.filter(inst => 
+            inst.type === 'withdraw' || inst.type === 'withdrawPartialUnstaking'
+        );
 
-                // Check inner instructions for any other Jupiter staking calls
-                if (instruction.innerInstructions) {
-                    for (const innerInstruction of instruction.innerInstructions) {
-                        if (innerInstruction.programId === JUPITER_STAKING_PROGRAM) {
-                            const parsedInner = this.parseInstructionData(innerInstruction);
-                            
-                            if (parsedInner && parsedInner.type !== 'unknown' && parsedInner.type !== 'toggleMaxLock') {
-                                const amount = this.extractAmountFromTokenTransfers(transaction.tokenTransfers);
-                                
-                                if (amount > 0) {
-                                    if (parsedInner.type === 'increaseLockedAmount') {
-                                        dayData.staked += amount;
-                                        walletDayData.staked += amount;
-                                    } else if (parsedInner.type === 'withdraw' || parsedInner.type === 'withdrawPartialUnstaking') {
-                                        dayData.withdrawn += amount;
-                                        walletDayData.withdrawn += amount;
-                                    }
-                                    
-                                    this.allWallets.add(walletAddress);
-                                    hasStakingActivity = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        let hasStakingActivity = false;
+
+        if (stakingInstructions.length > 0) {
+            dayData.staked += totalAmount;
+            walletDayData.staked += totalAmount;
+            hasStakingActivity = true;
+        }
+
+        if (withdrawInstructions.length > 0) {
+            dayData.withdrawn += totalAmount;
+            walletDayData.withdrawn += totalAmount;
+            hasStakingActivity = true;
         }
 
         if (hasStakingActivity) {
             dayData.transactionCount++;
             walletDayData.netChange = walletDayData.staked - walletDayData.withdrawn;
+            this.allWallets.add(walletAddress);
         }
 
         dayData.netChange = dayData.staked - dayData.withdrawn;
-        return true;
+        return hasStakingActivity;
     }
 
     calculateIncrementalWalletCounts(existingData, latestChanges) {
@@ -270,8 +311,6 @@ class EnhancedCombinedUpdater {
         
         const lastCompletedDate = this.getLastCompletedDate();
 
-        console.log(`🔄 Fetching transactions through: ${lastCompletedDate}`);
-
         while (hasMore) {
             const transactions = await this.fetchTransactionsByAddress(
                 JUPITER_STAKING_PROGRAM, 
@@ -284,8 +323,6 @@ class EnhancedCombinedUpdater {
                 break;
             }
 
-            let processedInBatch = 0;
-            
             for (const transaction of transactions) {
                 const txDate = new Date(transaction.timestamp * 1000).toISOString().split('T')[0];
                 
@@ -293,9 +330,7 @@ class EnhancedCombinedUpdater {
                     continue;
                 }
                 
-                if (this.processTransaction(transaction)) {
-                    processedInBatch++;
-                }
+                this.processTransaction(transaction);
             }
 
             const oldestTx = transactions[transactions.length - 1];
@@ -306,7 +341,9 @@ class EnhancedCombinedUpdater {
             }
 
             beforeSignature = oldestTx.signature;
-            await new Promise(resolve => setTimeout(resolve, 100));
+            batchCount++;
+            
+            await new Promise(resolve => setTimeout(resolve, 200));
         }
 
         return this.getDailyChanges();
@@ -329,8 +366,23 @@ class EnhancedCombinedUpdater {
             const jsonContent = fs.readFileSync(filename, 'utf8');
             const data = JSON.parse(jsonContent);
             
+            const cleanedDailyData = this.removeDuplicateDates(data.dailyData);
+            
+            if (cleanedDailyData.length !== data.dailyData.length) {
+                console.log(`🧹 Removed ${data.dailyData.length - cleanedDailyData.length} duplicate entries`);
+                data.dailyData = cleanedDailyData;
+                data.summary.totalRecords = cleanedDailyData.length;
+                
+                if (cleanedDailyData.length > 0) {
+                    const latestEntry = cleanedDailyData[0];
+                    data.summary.latestDate = latestEntry.date;
+                    data.summary.latestTotalStaked = latestEntry.totalStaked;
+                    data.summary.latestActiveWallets = latestEntry.activeWallets;
+                }
+            }
+            
             const latestCompleteDate = new Date(data.summary.latestDate);
-            CUTOFF_DATE = data.summary.latestDate + ' 00:00:00.000';
+            CUTOFF_DATE = data.summary.latestDate;
             CUTOFF_TIMESTAMP = latestCompleteDate.getTime() / 1000;
             
             return data;
@@ -340,34 +392,44 @@ class EnhancedCombinedUpdater {
         }
     }
 
+    removeDuplicateDates(dailyData) {
+        const dateMap = new Map();
+        
+        for (const entry of dailyData) {
+            const date = entry.date;
+            if (!dateMap.has(date)) {
+                dateMap.set(date, entry);
+            } else {
+                const existing = dateMap.get(date);
+                if (entry.totalStaked > existing.totalStaked) {
+                    dateMap.set(date, entry);
+                }
+            }
+        }
+        
+        return Array.from(dateMap.values()).sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
+
     updateDataWithLatest(existingData, latestChanges) {
         if (!existingData || !existingData.dailyData || existingData.dailyData.length === 0) {
             console.log('❌ No existing data to update');
             return null;
         }
 
-        // Calculate incremental wallet counts (simpler approach for daily updates)
-        console.log(`\n🔄 Calculating incremental wallet counts...`);
         const incrementalWalletCounts = this.calculateIncrementalWalletCounts(existingData, latestChanges);
-
-        // Get the latest totals from existing data
         let currentTotalStaked = existingData.summary.latestTotalStaked;
-        
         const updatedData = [...existingData.dailyData];
 
-        console.log(`\n📈 Applying changes after ${CUTOFF_DATE}:`);
-        console.log(`Starting total staked: ${currentTotalStaked.toLocaleString()} JUP`);
-
-        // Apply changes in chronological order (oldest first)
         const sortedChanges = latestChanges.sort((a, b) => new Date(a.date) - new Date(b.date));
+        
+        console.log(`📈 Processing ${sortedChanges.length} daily changes`);
         
         for (const change of sortedChanges) {
             currentTotalStaked += change.netChange;
             const activeWallets = incrementalWalletCounts.get(change.date) || null;
             
-            console.log(`${change.date}: ${change.netChange > 0 ? '+' : ''}${change.netChange.toLocaleString()} JUP → ${currentTotalStaked.toLocaleString()} JUP | ${activeWallets?.toLocaleString() || 'N/A'} active wallets (${change.uniqueWalletsActive} daily active)`);
+            console.log(`${change.date}: ${change.netChange > 0 ? '+' : ''}${change.netChange.toLocaleString()} JUP → ${currentTotalStaked.toLocaleString()} JUP`);
             
-            // Add to the beginning of array (newest first)
             updatedData.unshift({
                 date: change.date,
                 totalStaked: currentTotalStaked,
@@ -375,24 +437,24 @@ class EnhancedCombinedUpdater {
             });
         }
 
-        // Get latest values for summary
-        const latestEntry = updatedData[0];
+        const finalData = this.removeDuplicateDates(updatedData);
+        const latestEntry = finalData[0];
 
         return {
             summary: {
-                totalRecords: updatedData.length,
+                totalRecords: finalData.length,
                 latestDate: latestEntry.date,
                 latestTotalStaked: latestEntry.totalStaked,
                 latestActiveWallets: latestEntry.activeWallets,
                 oldestDate: existingData.summary.oldestDate
             },
-            dailyData: updatedData
+            dailyData: finalData
         };
     }
 
     saveUpdatedData(data, outputFilename) {
         fs.writeFileSync(outputFilename, JSON.stringify(data, null, 2));
-        console.log(`✅ Updated: ${data.summary.latestDate} | ${data.summary.latestTotalStaked.toLocaleString()} JUP | ${data.summary.latestActiveWallets?.toLocaleString() || 'N/A'} wallets`);
+        console.log(`✅ Updated: ${data.summary.latestDate} | ${data.summary.latestTotalStaked.toLocaleString()} JUP`);
         return data;
     }
 }
@@ -400,53 +462,50 @@ class EnhancedCombinedUpdater {
 async function updateCombinedStaking() {
     const JSON_FILENAME = 'jupiter_combined_staking.json';
     
-    const updater = new EnhancedCombinedUpdater(HELIUS_API_KEY);
+    const updater = new JupiterUpdater(HELIUS_API_KEY);
     
     try {
-        // Step 1: Read existing combined data
+        console.log(`🔄 Daily update starting: ${new Date().toISOString()}`);
+        
         const existingData = updater.readExistingData(JSON_FILENAME);
         
         if (!existingData) {
-            console.log('❌ No existing data found - please run merger first');
+            console.log('❌ No existing data found');
             return;
         }
 
-        // Check if we need to update anything
-        const lastCompletedDate = updater.getLastCompletedDate(); // Use updater instance
+        const lastCompletedDate = updater.getLastCompletedDate();
         const latestDate = existingData.summary.latestDate;
         
         if (latestDate >= lastCompletedDate) {
-            console.log(`✅ Data is already up to date through last completed day (${lastCompletedDate})!`);
+            console.log(`✅ Data already up to date through ${lastCompletedDate}`);
             return;
         }
         
-        console.log(`🔄 Missing data from ${latestDate} through completed day ${lastCompletedDate}`);
+        console.log(`🔄 Updating from ${latestDate} to ${lastCompletedDate}`);
         
-        // Step 2: Fetch latest transactions
         const latestChanges = await updater.fetchLatestTransactions();
         
-        console.log(`\n🔍 Found changes for ${latestChanges.length} days after cutoff`);
-        
         if (latestChanges.length === 0) {
-            console.log('✅ No new transactions found - data is up to date!');
+            console.log('✅ No new data found');
             return;
         }
 
-        // Step 3: Update data with latest changes (including proper wallet calculation)
         const updatedData = updater.updateDataWithLatest(existingData, latestChanges);
         
         if (!updatedData) {
-            console.log('❌ Failed to update data');
+            console.log('❌ Update failed');
             return;
         }
         
-        // Step 4: Save updated data
         updater.saveUpdatedData(updatedData, JSON_FILENAME);
+        console.log(`✅ Daily update completed: ${new Date().toISOString()}`);
         
         return updatedData;
         
     } catch (error) {
-        console.error('❌ Update failed:', error);
+        console.error('❌ Daily update failed:', error);
+        process.exit(1);
     }
 }
 
