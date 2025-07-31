@@ -1,161 +1,196 @@
 {
   "summary": {
-    "totalRecords": 516,
-    "latestDate": "2025-07-28",
-    "latestTotalStaked": 620706770.090998,
-    "latestActiveWallets": 430477,
+    "totalRecords": 523,
+    "latestDate": "2025-07-30",
+    "latestTotalStaked": 660057541.852216,
+    "latestActiveWallets": 415984,
     "oldestDate": "2024-02-20"
   },
   "dailyData": [
     {
+      "date": "2025-07-30",
+      "totalStaked": 660057541.852216,
+      "activeWallets": 415984
+    },
+    {
+      "date": "2025-07-29",
+      "totalStaked": 660096744.701163,
+      "activeWallets": 416004
+    },
+    {
       "date": "2025-07-28",
-      "totalStaked": 620706770.090998,
-      "activeWallets": 430477
+      "totalStaked": 660761226.6102,
+      "activeWallets": 416060
     },
     {
       "date": "2025-07-27",
-      "totalStaked": 621731003.821299,
-      "activeWallets": 430192
+      "totalStaked": 660550212.970174,
+      "activeWallets": 416270
     },
     {
       "date": "2025-07-26",
-      "totalStaked": 621949409.3420969,
-      "activeWallets": 430100
+      "totalStaked": 661766408.929461,
+      "activeWallets": 416355
     },
     {
       "date": "2025-07-25",
-      "totalStaked": 624060518.210864,
-      "activeWallets": 429895
+      "totalStaked": 661851053.400874,
+      "activeWallets": 416440
     },
     {
       "date": "2025-07-24",
-      "totalStaked": 626356505.913037,
-      "activeWallets": 429628
+      "totalStaked": 663884385.009398,
+      "activeWallets": 416586
     },
     {
       "date": "2025-07-23",
-      "totalStaked": 629067349.2039969,
-      "activeWallets": 429302
+      "totalStaked": 664133012.415696,
+      "activeWallets": 416720
     },
     {
       "date": "2025-07-22",
-      "totalStaked": 635487354.9758068,
-      "activeWallets": 428885
+      "totalStaked": 666582487.868058,
+      "activeWallets": 416840
     },
     {
       "date": "2025-07-21",
-      "totalStaked": 640325593.3065048,
-      "activeWallets": 428296
+      "totalStaked": 670543872.719271,
+      "activeWallets": 417014
     },
     {
       "date": "2025-07-20",
-      "totalStaked": 642661330.3979999,
-      "activeWallets": 427722
+      "totalStaked": 671407340.527056,
+      "activeWallets": 417476
     },
     {
       "date": "2025-07-19",
-      "totalStaked": 644129098.7666099,
-      "activeWallets": 427483
+      "totalStaked": 672834444.108266,
+      "activeWallets": 417694
     },
     {
       "date": "2025-07-18",
-      "totalStaked": 644230645.62383,
-      "activeWallets": 426920
+      "totalStaked": 672484859.456604,
+      "activeWallets": 417757
     },
     {
       "date": "2025-07-17",
-      "totalStaked": 645024845.715874,
-      "activeWallets": 426709
+      "totalStaked": 673274465.973073,
+      "activeWallets": 417867
     },
     {
       "date": "2025-07-16",
-      "totalStaked": 644153966.611991,
-      "activeWallets": 426054
+      "totalStaked": 672793619.295651,
+      "activeWallets": 418114
     },
     {
       "date": "2025-07-15",
-      "totalStaked": 644412133.8757981,
-      "activeWallets": 425508
+      "totalStaked": 672877909.425862,
+      "activeWallets": 418306
     },
     {
       "date": "2025-07-14",
-      "totalStaked": 645133066.5346011,
-      "activeWallets": 424922
+      "totalStaked": 672926731.598808,
+      "activeWallets": 418408
     },
     {
       "date": "2025-07-13",
-      "totalStaked": 647123068.0480831,
-      "activeWallets": 424413
+      "totalStaked": 673475200.442515,
+      "activeWallets": 418579
     },
     {
       "date": "2025-07-12",
-      "totalStaked": 649137575.282016,
-      "activeWallets": 423995
+      "totalStaked": 674916733.11229,
+      "activeWallets": 418721
     },
     {
       "date": "2025-07-11",
-      "totalStaked": 649710549.846174,
-      "activeWallets": 423802
+      "totalStaked": 675489707.676448,
+      "activeWallets": 418859
     },
     {
       "date": "2025-07-10",
-      "totalStaked": 650351546.9053661,
-      "activeWallets": 422864
+      "totalStaked": 675430828.532616,
+      "activeWallets": 419057
     },
     {
       "date": "2025-07-09",
-      "totalStaked": 651110302.2522221,
-      "activeWallets": 422566
+      "totalStaked": 676189583.879472,
+      "activeWallets": 419274
     },
     {
       "date": "2025-07-08",
-      "totalStaked": 653583884.6597701,
-      "activeWallets": 421666
+      "totalStaked": 675381060.350218,
+      "activeWallets": 419446
     },
     {
       "date": "2025-07-07",
-      "totalStaked": 657674514.1258261,
-      "activeWallets": 421388
+      "totalStaked": 679471689.816274,
+      "activeWallets": 419470
     },
     {
       "date": "2025-07-06",
-      "totalStaked": 657530009.2513782,
-      "activeWallets": 421021
+      "totalStaked": 679329889.741122,
+      "activeWallets": 419534
+    },
+    {
+      "date": "2025-07-05",
+      "totalStaked": 679953191.127476,
+      "activeWallets": 419591
+    },
+    {
+      "date": "2025-07-04",
+      "totalStaked": 679340231.023873,
+      "activeWallets": 419604
+    },
+    {
+      "date": "2025-07-03",
+      "totalStaked": 679280754.817568,
+      "activeWallets": 419425
+    },
+    {
+      "date": "2025-07-02",
+      "totalStaked": 665674132.506842,
+      "activeWallets": 418492
+    },
+    {
+      "date": "2025-07-01",
+      "totalStaked": 665177028.397753,
+      "activeWallets": 417204
     },
     {
       "date": "2025-06-30",
-      "totalStaked": 658266481.3346242,
-      "activeWallets": 420950
+      "totalStaked": 665261281.210363,
+      "activeWallets": 417407
     },
     {
       "date": "2025-06-29",
-      "totalStaked": 658771005.1426682,
-      "activeWallets": 420704
+      "totalStaked": 665594809.579668,
+      "activeWallets": 417795
     },
     {
       "date": "2025-06-28",
-      "totalStaked": 659968955.7908813,
-      "activeWallets": 420491
+      "totalStaked": 665785390.876128,
+      "activeWallets": 418101
     },
     {
       "date": "2025-06-27",
-      "totalStaked": 660979906.4386243,
-      "activeWallets": 420382
+      "totalStaked": 666798692.321308,
+      "activeWallets": 418293
     },
     {
       "date": "2025-06-26",
-      "totalStaked": 661623779.3288453,
-      "activeWallets": 420086
+      "totalStaked": 666616839.495844,
+      "activeWallets": 418493
     },
     {
       "date": "2025-06-25",
-      "totalStaked": 663620183.3675562,
-      "activeWallets": 419905
+      "totalStaked": 667613346.844115,
+      "activeWallets": 418698
     },
     {
       "date": "2025-06-24",
-      "totalStaked": 665463977.8253921,
-      "activeWallets": 419678
+      "totalStaked": 668616849.253416,
+      "activeWallets": 419032
     },
     {
       "date": "2025-06-23",

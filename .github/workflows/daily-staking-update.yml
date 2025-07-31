@@ -1,5 +1,4 @@
 name: Daily Jupiter Staking & Wallets Update
-
 on:
   schedule:
     # Run daily at 01:00 UTC (adjust timezone as needed)
@@ -10,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  update-combined-staking-data:
+  update-staking-data:
     runs-on: ubuntu-latest
     
     steps:
@@ -27,7 +26,7 @@ jobs:
         npm init -y
         npm install dotenv
         
-    - name: Run combined staking update
+    - name: Run Jupiter staking update
       env:
         HELIUS_API_KEY: ${{ secrets.HELIUS_API_KEY }}
       run: node daily_updater.js
@@ -35,12 +34,27 @@ jobs:
     - name: Check for changes
       id: verify-changed-files
       run: |
-        if git diff --quiet jupiter_combined_staking.json; then
-          echo "No changes detected in combined data"
-          echo "changed=false" >> $GITHUB_OUTPUT
-        else
-          echo "Changes detected in combined data"
+        # Check if either file has changes
+        COMBINED_CHANGED=false
+        WALLETS_CHANGED=false
+        
+        if ! git diff --quiet jupiter_combined_staking.json; then
+          COMBINED_CHANGED=true
+          echo "Changes detected in jupiter_combined_staking.json"
+        fi
+        
+        if ! git diff --quiet wallet_states.json; then
+          WALLETS_CHANGED=true
+          echo "Changes detected in wallet_states.json"
+        fi
+        
+        if [ "$COMBINED_CHANGED" = true ] || [ "$WALLETS_CHANGED" = true ]; then
           echo "changed=true" >> $GITHUB_OUTPUT
+          echo "combined_changed=$COMBINED_CHANGED" >> $GITHUB_OUTPUT
+          echo "wallets_changed=$WALLETS_CHANGED" >> $GITHUB_OUTPUT
+        else
+          echo "No changes detected in any files"
+          echo "changed=false" >> $GITHUB_OUTPUT
         fi
         
     - name: Commit and push changes
@@ -48,10 +62,32 @@ jobs:
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        git add jupiter_combined_staking.json
-        git commit -m "Daily combined staking data update for $(date -u +%Y-%m-%d)"
+        
+        # Add changed files
+        if [ "${{ steps.verify-changed-files.outputs.combined_changed }}" = "true" ]; then
+          git add jupiter_combined_staking.json
+          echo "Added jupiter_combined_staking.json"
+        fi
+        
+        if [ "${{ steps.verify-changed-files.outputs.wallets_changed }}" = "true" ]; then
+          git add wallet_states.json
+          echo "Added wallet_states.json"
+        fi
+        
+        # Create descriptive commit message
+        COMMIT_MSG="Daily Jupiter data update for $(date -u +%Y-%m-%d)"
+        
+        if [ "${{ steps.verify-changed-files.outputs.combined_changed }}" = "true" ] && [ "${{ steps.verify-changed-files.outputs.wallets_changed }}" = "true" ]; then
+          COMMIT_MSG="$COMMIT_MSG - Updated staking totals and wallet states"
+        elif [ "${{ steps.verify-changed-files.outputs.combined_changed }}" = "true" ]; then
+          COMMIT_MSG="$COMMIT_MSG - Updated staking totals"
+        elif [ "${{ steps.verify-changed-files.outputs.wallets_changed }}" = "true" ]; then
+          COMMIT_MSG="$COMMIT_MSG - Updated wallet states"
+        fi
+        
+        git commit -m "$COMMIT_MSG"
         git push
         
     - name: No changes to commit
       if: steps.verify-changed-files.outputs.changed == 'false'
-      run: echo "No new combined staking data to commit"
+      run: echo "No new Jupiter staking data to commit"
