@@ -517,7 +517,7 @@ class JupiterUpdaterNew {
         }
         
         // Load combined staking data
-        const combinedData = this.readExistingData('jupiter_combined_staking_new.json');
+        const combinedData = this.readExistingData('jupiter_combined_staking.json');
         if (!combinedData) {
             throw new Error('Failed to load combined staking data');
         }
