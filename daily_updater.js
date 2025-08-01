@@ -5,6 +5,7 @@ const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const JUPITER_STAKING_PROGRAM = 'voTpe3tHQ7AjQHMapgSue2HJFAh2cGsdokqN3XqmVSj';
 const JUP_MINT = 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN';
 const CLAIM_STAKE_PROGRAM = 'DiS3nNjFVMieMgmiQFm6wgJL7nevk4NrhXKLbtEH1Z2R';
+const EXCLUDED_WALLETS = [];
 
 let CUTOFF_DATE;
 let CUTOFF_TIMESTAMP;
@@ -13,7 +14,7 @@ class JupiterUpdaterNew {
     constructor(apiKey) {
         this.apiKey = apiKey;
         this.baseUrl = 'https://api.helius.xyz';
-        this.walletStates = new Map(); // wallet_address -> balance
+        this.walletStates = new Map();
         this.walletStatesDate = null;
         this.dailyTotals = new Map();
         this.walletActivityByDate = new Map();
@@ -33,21 +34,19 @@ class JupiterUpdaterNew {
             const walletStatesData = JSON.parse(fs.readFileSync('wallet_states.json', 'utf8'));
             this.walletStatesDate = walletStatesData.asOfDate;
             
-            // Load wallet states into Map
             for (const [address, balance] of Object.entries(walletStatesData.wallets)) {
-                this.walletStates.set(address, balance);
+                if (!EXCLUDED_WALLETS.includes(address)) {
+                    this.walletStates.set(address, balance);
+                }
             }
             
-            console.log(`📊 Loaded ${this.walletStates.size} wallet states from ${this.walletStatesDate}`);
-            
-            // Set up cutoff timestamp from wallet states date
             const walletStatesTimestamp = new Date(this.walletStatesDate + 'T23:59:59Z');
             CUTOFF_DATE = this.walletStatesDate;
             CUTOFF_TIMESTAMP = walletStatesTimestamp.getTime() / 1000;
             
             return true;
         } catch (error) {
-            console.error('❌ Error loading wallet states:', error.message);
+            console.error('Error loading wallet states:', error.message);
             return false;
         }
     }
@@ -60,7 +59,6 @@ class JupiterUpdaterNew {
             const cleanedDailyData = this.removeDuplicateDates(data.dailyData);
             
             if (cleanedDailyData.length !== data.dailyData.length) {
-                console.log(`🧹 Removed ${data.dailyData.length - cleanedDailyData.length} duplicate entries`);
                 data.dailyData = cleanedDailyData;
                 data.summary.totalRecords = cleanedDailyData.length;
                 
@@ -72,10 +70,9 @@ class JupiterUpdaterNew {
                 }
             }
             
-            console.log(`📈 Loaded combined staking data, latest: ${data.summary.latestDate}`);
             return data;
         } catch (error) {
-            console.error(`❌ Error reading JSON: ${error.message}`);
+            console.error(`Error reading JSON: ${error.message}`);
             return null;
         }
     }
@@ -96,6 +93,43 @@ class JupiterUpdaterNew {
         }
         
         return Array.from(dateMap.values()).sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
+
+    getDateRange(startDate, endDate) {
+        const dates = [];
+        const current = new Date(startDate);
+        const end = new Date(endDate);
+        
+        while (current <= end) {
+            dates.push(current.toISOString().split('T')[0]);
+            current.setUTCDate(current.getUTCDate() + 1);
+        }
+        
+        return dates;
+    }
+
+    findMissingDates(existingData, targetEndDate) {
+        if (!existingData || !existingData.dailyData || existingData.dailyData.length === 0) {
+            return this.getDateRange(CUTOFF_DATE, targetEndDate);
+        }
+
+        const latestDate = existingData.summary.latestDate;
+        const nextDay = new Date(latestDate);
+        nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+        const nextDayStr = nextDay.toISOString().split('T')[0];
+        
+        if (nextDayStr > targetEndDate) {
+            return [];
+        }
+        
+        return this.getDateRange(nextDayStr, targetEndDate);
+    }
+
+    getTargetEndDate() {
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+        return yesterday.toISOString().split('T')[0];
     }
 
     async fetchTransactionsByAddress(address, beforeSignature = null, limit = 100, retries = 5) {
@@ -246,28 +280,19 @@ class JupiterUpdaterNew {
         };
     }
 
-    getLastCompletedDate() {
-        const today = new Date();
-        const yesterday = new Date(today);
-        yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-        return yesterday.toISOString().split('T')[0];
-    }
-
-    processTransaction(transaction) {
+    processTransaction(transaction, targetEndDate) {
         if (this.processedSignatures.has(transaction.signature)) {
             this.duplicateStats.duplicatesSkipped++;
             return false;
         }
 
-        // Only process transactions after the cutoff timestamp
         if (transaction.timestamp < CUTOFF_TIMESTAMP) {
             return false;
         }
 
         const date = new Date(transaction.timestamp * 1000).toISOString().split('T')[0];
-        const lastCompletedDate = this.getLastCompletedDate();
         
-        if (date > lastCompletedDate) {
+        if (date > targetEndDate) {
             return false;
         }
 
@@ -289,7 +314,7 @@ class JupiterUpdaterNew {
         const dayWalletActivity = this.walletActivityByDate.get(date);
 
         const walletAddress = this.extractWalletFromTransaction(transaction);
-        if (!walletAddress) return false;
+        if (!walletAddress || EXCLUDED_WALLETS.includes(walletAddress)) return false;
 
         if (!dayWalletActivity.has(walletAddress)) {
             dayWalletActivity.set(walletAddress, {
@@ -348,15 +373,14 @@ class JupiterUpdaterNew {
             walletDayData.netChange = walletDayData.staked - walletDayData.withdrawn;
             this.allWallets.add(walletAddress);
             
-            // Update wallet state
             if (netWalletChange !== 0) {
                 const currentBalance = this.walletStates.get(walletAddress) || 0;
                 const newBalance = currentBalance + netWalletChange;
                 
                 if (newBalance <= 0.0000009999) {
-                    this.walletStates.delete(walletAddress); // Wallet becomes inactive
+                    this.walletStates.delete(walletAddress);
                 } else {
-                    this.walletStates.set(walletAddress, newBalance); // Wallet stays/becomes active
+                    this.walletStates.set(walletAddress, newBalance);
                 }
             }
         }
@@ -365,13 +389,15 @@ class JupiterUpdaterNew {
         return hasStakingActivity;
     }
 
-    async fetchLatestTransactions() {
+    async fetchTransactionsForDateRange(missingDates) {
         let beforeSignature = null;
         let hasMore = true;
         let batchCount = 0;
         
-        const lastCompletedDate = this.getLastCompletedDate();
-        console.log(`🔄 Fetching transactions from ${CUTOFF_DATE} to ${lastCompletedDate}`);
+        const oldestMissingDate = missingDates[0];
+        const newestMissingDate = missingDates[missingDates.length - 1];
+        
+        console.log(`Fetching transactions for ${missingDates.length} missing dates: ${oldestMissingDate} to ${newestMissingDate}`);
 
         while (hasMore) {
             const transactions = await this.fetchTransactionsByAddress(
@@ -388,11 +414,11 @@ class JupiterUpdaterNew {
             for (const transaction of transactions) {
                 const txDate = new Date(transaction.timestamp * 1000).toISOString().split('T')[0];
                 
-                if (txDate > lastCompletedDate) {
+                if (txDate > newestMissingDate) {
                     continue;
                 }
                 
-                this.processTransaction(transaction);
+                this.processTransaction(transaction, newestMissingDate);
             }
 
             const oldestTx = transactions[transactions.length - 1];
@@ -406,13 +432,8 @@ class JupiterUpdaterNew {
             batchCount++;
             
             await new Promise(resolve => setTimeout(resolve, 200));
-            
-            if (batchCount % 10 === 0) {
-                console.log(`📦 Processed ${batchCount} batches, latest date: ${new Date(oldestTx.timestamp * 1000).toISOString().split('T')[0]}`);
-            }
         }
 
-        console.log(`✅ Completed fetching transactions in ${batchCount} batches`);
         return this.getDailyChanges();
     }
 
@@ -424,13 +445,12 @@ class JupiterUpdaterNew {
             staked: this.dailyTotals.get(date).staked,
             withdrawn: this.dailyTotals.get(date).withdrawn,
             transactionCount: this.dailyTotals.get(date).transactionCount,
-            activeWallets: this.walletStates.size // Real active wallet count
+            activeWallets: this.walletStates.size
         }));
     }
 
     updateDataWithLatest(existingData, latestChanges) {
         if (!existingData || !existingData.dailyData || existingData.dailyData.length === 0) {
-            console.log('❌ No existing data to update');
             return null;
         }
 
@@ -439,12 +459,8 @@ class JupiterUpdaterNew {
 
         const sortedChanges = latestChanges.sort((a, b) => new Date(a.date) - new Date(b.date));
         
-        console.log(`📈 Processing ${sortedChanges.length} daily changes`);
-        
         for (const change of sortedChanges) {
             currentTotalStaked += change.netChange;
-            
-            console.log(`${change.date}: ${change.netChange > 0 ? '+' : ''}${change.netChange.toLocaleString()} JUP → ${currentTotalStaked.toLocaleString()} JUP, ${change.activeWallets.toLocaleString()} wallets`);
             
             updatedData.unshift({
                 date: change.date,
@@ -471,7 +487,9 @@ class JupiterUpdaterNew {
     saveWalletStates(asOfDate) {
         const walletsObject = {};
         for (const [address, balance] of this.walletStates.entries()) {
-            walletsObject[address] = balance;
+            if (!EXCLUDED_WALLETS.includes(address)) {
+                walletsObject[address] = balance;
+            }
         }
         
         const walletStatesData = {
@@ -480,82 +498,47 @@ class JupiterUpdaterNew {
         };
         
         fs.writeFileSync('wallet_states.json', JSON.stringify(walletStatesData, null, 2));
-        console.log(`💾 Updated wallet_states.json as of ${asOfDate} with ${this.walletStates.size} wallets`);
     }
 
     saveUpdatedData(data, outputFilename) {
         fs.writeFileSync(outputFilename, JSON.stringify(data, null, 2));
-        console.log(`💾 Updated ${outputFilename}`);
         return data;
     }
 
-    calculateTotalStakedFromWalletStates() {
-        let total = 0;
-        for (const balance of this.walletStates.values()) {
-            total += balance;
-        }
-        return total;
-    }
-
-    printStats() {
-        console.log(`\n📊 Processing Statistics:`);
-        console.log(`   Total Processed: ${this.duplicateStats.totalProcessed}`);
-        console.log(`   Duplicates Skipped: ${this.duplicateStats.duplicatesSkipped}`);
-        console.log(`   Direct Staking: ${this.duplicateStats.directStaking}`);
-        console.log(`   Claim & Stake: ${this.duplicateStats.claimAndStake}`);
-        console.log(`   Withdrawals: ${this.duplicateStats.withdrawals}`);
-        console.log(`   Final Active Wallets: ${this.walletStates.size.toLocaleString()}`);
-        console.log(`   Total Staked (from states): ${this.calculateTotalStakedFromWalletStates().toLocaleString()} JUP`);
-    }
-
     async run() {
-        console.log(`🚀 Jupiter Daily Updater New starting: ${new Date().toISOString()}`);
-        
-        // Load wallet states first
         if (!this.loadWalletStates()) {
             throw new Error('Failed to load wallet states');
         }
         
-        // Load combined staking data
         const combinedData = this.readExistingData('jupiter_combined_staking.json');
         if (!combinedData) {
             throw new Error('Failed to load combined staking data');
         }
         
-        // Check if update is needed
-        const lastCompletedDate = this.getLastCompletedDate();
-        const latestDate = combinedData.summary.latestDate;
+        const targetEndDate = this.getTargetEndDate();
+        const missingDates = this.findMissingDates(combinedData, targetEndDate);
         
-        if (latestDate >= lastCompletedDate) {
-            console.log(`✅ Data already up to date through ${lastCompletedDate}`);
-            return;
+        if (missingDates.length === 0) {
+            return combinedData;
         }
         
-        console.log(`🔄 Updating from ${latestDate} to ${lastCompletedDate}`);
-        
-        // Fetch and process transactions
-        const latestChanges = await this.fetchLatestTransactions();
+        const latestChanges = await this.fetchTransactionsForDateRange(missingDates);
         
         if (latestChanges.length === 0) {
-            console.log('✅ No new data found');
-            return;
+            return combinedData;
         }
 
-        // Update data
         const updatedData = this.updateDataWithLatest(combinedData, latestChanges);
         
         if (!updatedData) {
-            console.log('❌ Update failed');
-            return;
+            return combinedData;
         }
         
-        // Save both files
         const latestProcessedDate = latestChanges[latestChanges.length - 1].date;
         this.saveWalletStates(latestProcessedDate);
-        this.saveUpdatedData(updatedData, 'jupiter_combined_staking_new.json');
+        this.saveUpdatedData(updatedData, 'jupiter_combined_staking.json');
         
-        this.printStats();
-        console.log(`✅ Daily update completed: ${new Date().toISOString()}`);
+        console.log(`Updated ${latestChanges.length} missing dates through ${latestProcessedDate}`);
         
         return updatedData;
     }
@@ -566,7 +549,7 @@ async function main() {
         const updater = new JupiterUpdaterNew(HELIUS_API_KEY);
         await updater.run();
     } catch (error) {
-        console.error('❌ Daily update failed:', error);
+        console.error('Daily update failed:', error);
         process.exit(1);
     }
 }
