@@ -1,12 +1,17 @@
 {
   "summary": {
-    "totalRecords": 524,
-    "latestDate": "2025-07-31",
-    "latestTotalStaked": 660222627.58344,
-    "latestActiveWallets": 415830,
+    "totalRecords": 525,
+    "latestDate": "2025-08-01",
+    "latestTotalStaked": 658723467.9657359,
+    "latestActiveWallets": 415232,
     "oldestDate": "2024-02-20"
   },
   "dailyData": [
+    {
+      "date": "2025-08-01",
+      "totalStaked": 658723467.9657359,
+      "activeWallets": 415232
+    },
     {
       "date": "2025-07-31",
       "totalStaked": 660222627.58344,
