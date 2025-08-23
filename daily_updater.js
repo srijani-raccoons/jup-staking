@@ -1,10 +1,12 @@
 require('dotenv').config();
 const fs = require('fs');
+const { Connection, PublicKey } = require('@solana/web3.js');
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const JUPITER_STAKING_PROGRAM = 'voTpe3tHQ7AjQHMapgSue2HJFAh2cGsdokqN3XqmVSj';
 const JUP_MINT = 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN';
 const CLAIM_STAKE_PROGRAM = 'DiS3nNjFVMieMgmiQFm6wgJL7nevk4NrhXKLbtEH1Z2R';
+const LOCKER_ACCOUNT = 'CVMdMd79no569tjc5Sq7kzz8isbfCcFyBS5TLGsrZ5dN';
 const EXCLUDED_WALLETS = [];
 
 let CUTOFF_DATE;
@@ -14,6 +16,7 @@ class JupiterUpdaterNew {
     constructor(apiKey) {
         this.apiKey = apiKey;
         this.baseUrl = 'https://api.helius.xyz';
+        this.connection = new Connection(`https://mainnet.helius-rpc.com/?api-key=${apiKey}`);
         this.walletStates = new Map();
         this.walletStatesDate = null;
         this.dailyTotals = new Map();
@@ -27,6 +30,24 @@ class JupiterUpdaterNew {
             claimAndStake: 0,
             withdrawals: 0
         };
+    }
+
+    async getLockerTotal() {
+        try {
+            const accountInfo = await this.connection.getAccountInfo(new PublicKey(LOCKER_ACCOUNT));
+            if (!accountInfo) {
+                throw new Error('Locker account not found');
+            }
+            
+            const lockedSupplyLamports = accountInfo.data.readBigUInt64LE(73);
+            const totalStakedJUP = Number(lockedSupplyLamports) / 1_000_000;
+            
+            console.log(`Current locker total: ${totalStakedJUP.toLocaleString()} JUP`);
+            return totalStakedJUP;
+        } catch (error) {
+            console.error('Error fetching locker total:', error);
+            throw error;
+        }
     }
 
     loadWalletStates() {
@@ -302,9 +323,6 @@ class JupiterUpdaterNew {
         if (!this.dailyTotals.has(date)) {
             this.dailyTotals.set(date, {
                 date: date,
-                staked: 0,
-                withdrawn: 0,
-                netChange: 0,
                 transactionCount: 0
             });
             this.walletActivityByDate.set(date, new Map());
@@ -348,7 +366,6 @@ class JupiterUpdaterNew {
         let netWalletChange = 0;
 
         if (stakingInstructions.length > 0) {
-            dayData.staked += totalAmount;
             walletDayData.staked += totalAmount;
             netWalletChange += totalAmount;
             hasStakingActivity = true;
@@ -361,7 +378,6 @@ class JupiterUpdaterNew {
         }
 
         if (withdrawInstructions.length > 0) {
-            dayData.withdrawn += totalAmount;
             walletDayData.withdrawn += totalAmount;
             netWalletChange -= totalAmount;
             hasStakingActivity = true;
@@ -373,6 +389,7 @@ class JupiterUpdaterNew {
             walletDayData.netChange = walletDayData.staked - walletDayData.withdrawn;
             this.allWallets.add(walletAddress);
             
+            // Update wallet balances for counting active wallets
             if (netWalletChange !== 0) {
                 const currentBalance = this.walletStates.get(walletAddress) || 0;
                 const newBalance = currentBalance + netWalletChange;
@@ -385,7 +402,6 @@ class JupiterUpdaterNew {
             }
         }
 
-        dayData.netChange = dayData.staked - dayData.withdrawn;
         return hasStakingActivity;
     }
 
@@ -441,30 +457,27 @@ class JupiterUpdaterNew {
         const sortedDates = Array.from(this.dailyTotals.keys()).sort();
         return sortedDates.map(date => ({
             date: date,
-            netChange: this.dailyTotals.get(date).netChange,
-            staked: this.dailyTotals.get(date).staked,
-            withdrawn: this.dailyTotals.get(date).withdrawn,
             transactionCount: this.dailyTotals.get(date).transactionCount,
             activeWallets: this.walletStates.size
         }));
     }
 
-    updateDataWithLatest(existingData, latestChanges) {
+    async updateDataWithLatest(existingData, latestChanges) {
         if (!existingData || !existingData.dailyData || existingData.dailyData.length === 0) {
             return null;
         }
 
-        let currentTotalStaked = existingData.summary.latestTotalStaked;
+        // Get current total from locker account
+        const currentLockerTotal = await this.getLockerTotal();
         const updatedData = [...existingData.dailyData];
 
         const sortedChanges = latestChanges.sort((a, b) => new Date(a.date) - new Date(b.date));
         
+        // Add new daily entries with locker total and wallet count
         for (const change of sortedChanges) {
-            currentTotalStaked += change.netChange;
-            
             updatedData.unshift({
                 date: change.date,
-                totalStaked: currentTotalStaked,
+                totalStaked: currentLockerTotal, // Use current locker total
                 activeWallets: change.activeWallets
             });
         }
@@ -519,16 +532,18 @@ class JupiterUpdaterNew {
         const missingDates = this.findMissingDates(combinedData, targetEndDate);
         
         if (missingDates.length === 0) {
+            console.log('No missing dates to process');
             return combinedData;
         }
         
         const latestChanges = await this.fetchTransactionsForDateRange(missingDates);
         
         if (latestChanges.length === 0) {
+            console.log('No staking activity found for missing dates');
             return combinedData;
         }
 
-        const updatedData = this.updateDataWithLatest(combinedData, latestChanges);
+        const updatedData = await this.updateDataWithLatest(combinedData, latestChanges);
         
         if (!updatedData) {
             return combinedData;
@@ -539,6 +554,8 @@ class JupiterUpdaterNew {
         this.saveUpdatedData(updatedData, 'jupiter_combined_staking.json');
         
         console.log(`Updated ${latestChanges.length} missing dates through ${latestProcessedDate}`);
+        console.log(`Current total staked: ${updatedData.summary.latestTotalStaked.toLocaleString()} JUP`);
+        console.log(`Active wallets: ${updatedData.summary.latestActiveWallets.toLocaleString()}`);
         
         return updatedData;
     }
